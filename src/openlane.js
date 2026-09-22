@@ -5,24 +5,107 @@ import openlaneCSS from './openlane.css?inline'
   const LOG = '[OL Downloader]'
   let downloadBtnInjected = false
 
-  /* ── Tag-name helpers ───────────────────────────────────
-   * Openlane uses Stencil-scoped custom elements whose tag names carry a
-   * build hash (e.g. ignite-typography-7x-42y-0z, …-8x-5y-4z, etc.) that
-   * changes every release.  We cannot hardcode the suffix — match by
-   * tag-name prefix instead.
+  /* ── Selectors ─────────────────────────────────────────
+   * The gallery is a Tailwind/shadcn dialog, and its utility classes churn
+   * with every restyle.  Anchor on, in priority order:
+   *   1. ARIA roles / labels          (least likely to change)
+   *   2. data-slot component attrs
+   *   3. semantic tags + text content
+   * Never anchor on Tailwind classes.  If the button stops appearing, check
+   * the console for "[OL Downloader]" warnings and update this block.
    */
-  function queryByTagPrefix(root, prefix) {
-    const p = prefix.toLowerCase()
-    return Array.from(root.querySelectorAll('*')).find(
-      el => el.tagName.toLowerCase().startsWith(p)
-    ) || null
+  const SELECTORS = {
+    closeBtn: 'button[aria-label="Close gallery"]',
+    dialog: '[role="dialog"]',
+    galleryHeading: 'aside h2',
+    sidebar: 'aside',
+    section: 'aside section',
+    sectionHeading: 'h3',
+    image: 'button img[src]',
+    video: 'button video[src]',
+    header: 'header',
+    // Vehicle detail page (behind the gallery): VIN lives in a copy button
+    // whose text is split across nodes ("2T3BFREV3<strong>GW528122</strong>").
+    vinCopyBtn: 'button[aria-label="Copy VIN"]',
+    // Legacy detail page: VIN attribute on ignite-photo-carousel-v2-<hash>
+    vinAttr: '[vin]',
   }
-  function queryAllByTagPrefix(root, prefix) {
-    const p = prefix.toLowerCase()
-    return Array.from(root.querySelectorAll('*')).filter(
-      el => el.tagName.toLowerCase().startsWith(p)
-    )
+  const GALLERY_HEADING_RE = /photo gallery/i
+  const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/
+  const VIN_TEXT_RE = /\b(?=[A-HJ-NPR-Z0-9]*\d)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{17}\b/
+
+  let warnedAnchorMissing = false
+
+  /* ── Locate the gallery dialog ──────────────────────────────
+   * Primary: the "Close gallery" button's enclosing dialog.
+   * Fallback: any dialog whose sidebar heading reads "Photo Gallery".
+   * Returns { dialog, closeBtn } — closeBtn is null on the fallback path.
+   */
+  function findGallery() {
+    const closeBtn = document.querySelector(SELECTORS.closeBtn)
+    const viaClose = closeBtn && closeBtn.closest(SELECTORS.dialog)
+    if (viaClose) return { dialog: viaClose, closeBtn }
+
+    for (const dialog of document.querySelectorAll(SELECTORS.dialog)) {
+      const heading = dialog.querySelector(SELECTORS.galleryHeading)
+      if (heading && GALLERY_HEADING_RE.test(heading.textContent)) {
+        return { dialog, closeBtn: null }
+      }
+    }
+    return null
   }
+
+  /* ── Vehicle title + VIN for the ZIP filename ────────────── */
+  function getVehicleName(dialog) {
+    const header = dialog.querySelector(SELECTORS.header)
+    const titleEl = header && header.firstElementChild
+    const name = titleEl ? titleEl.textContent.replace(/\s+/g, ' ').trim() : ''
+    return name || 'vehicle'
+  }
+
+  // The VIN is rendered on the vehicle detail page's initial load, not in the
+  // gallery.  Cache it per URL as soon as it appears so it's still available
+  // if the page content is unmounted or hidden once the gallery opens.
+  let cachedVin = null // { path, vin }
+
+  function readVinFromPage() {
+    for (const el of document.querySelectorAll(SELECTORS.vinCopyBtn)) {
+      const vin = el.textContent.replace(/\s+/g, '').toUpperCase()
+      if (VIN_RE.test(vin)) return vin
+    }
+    for (const el of document.querySelectorAll(SELECTORS.vinAttr)) {
+      const vin = (el.getAttribute('vin') || '').trim().toUpperCase()
+      if (VIN_RE.test(vin)) return vin
+    }
+    return null
+  }
+
+  function captureVin() {
+    if (cachedVin && cachedVin.path === location.pathname) return
+    const vin = readVinFromPage()
+    if (vin) {
+      cachedVin = { path: location.pathname, vin }
+      console.log(LOG, `Captured VIN ${vin}`)
+    }
+  }
+
+  function findVin(dialog) {
+    const live = readVinFromPage()
+    if (live) return live
+    if (cachedVin && cachedVin.path === location.pathname) return cachedVin.vin
+
+    // Fallback: scan page text outside the gallery for a VIN pattern.  Check
+    // element text (not single text nodes) since the VIN may be split across
+    // nodes, e.g. "2T3BFREV3<strong>GW528122</strong>".
+    for (const el of document.body.querySelectorAll('*')) {
+      if (dialog.contains(el) || el.children.length > 3) continue
+      const m = el.textContent.toUpperCase().match(VIN_TEXT_RE)
+      if (m) return m[0]
+    }
+    console.warn(LOG, 'VIN not found on page — ZIP name will omit it')
+    return null
+  }
+
 
   /* ── Inject styles ──────────────────────────────────────── */
   function injectStyles() {
@@ -33,72 +116,40 @@ import openlaneCSS from './openlane.css?inline'
     document.head.appendChild(style)
   }
 
-  /* ── Parse gallery categories ───────────────────────────── */
-  function parseCategories(modal) {
-    const sections = modal.querySelectorAll('.modal__images')
+  /* ── Parse gallery categories + media URLs ───────────────
+   * Sidebar sections are <section><h3>N condition images</h3>…buttons…</section>.
+   * Each thumbnail button embeds the full-size <img src> (or <video src>), so
+   * the URL itself serves as the media id.
+   */
+  function parseGalleryData(dialog) {
     const categories = []
+    const mediaUrls = {}
 
-    sections.forEach(section => {
-      const typo = queryByTagPrefix(section, 'ignite-typography-')
-      if (!typo) return
-      const label = typo.textContent.trim().toLowerCase()
+    dialog.querySelectorAll(SELECTORS.section).forEach(section => {
+      const heading = section.querySelector(SELECTORS.sectionHeading)
+      if (!heading) return
+      const labelText = heading.textContent.trim()
+      const label = labelText.toLowerCase()
 
       let type = null
       let mediaType = 'image'
-      if (label.includes('condition images')) type = 'condition'
-      else if (label.includes('overview images')) type = 'overview'
+      if (label.includes('condition image')) type = 'condition'
+      else if (label.includes('overview image')) type = 'overview'
       else if (label.includes('video')) { type = 'video'; mediaType = 'video' }
       else return
 
-      if (mediaType === 'video') {
-        // Videos don't have ignite-photo IDs in the sidebar; count placeholders
-        // and resolve actual indices from the preview carousel later
-        const videoSlots = section.querySelectorAll('.image')
-        categories.push({ type, label: typo.textContent.trim(), ids: [], videoCount: videoSlots.length, mediaType })
-      } else {
-        const imageSlots = section.querySelectorAll('.image')
-        const ids = []
-        imageSlots.forEach(slot => {
-          const photo = queryByTagPrefix(slot, 'ignite-photo-')
-          if (photo) {
-            const n = parseInt(photo.id, 10)
-            if (!isNaN(n)) ids.push(n)
-          }
-        })
-        categories.push({ type, label: typo.textContent.trim(), ids, mediaType: 'image' })
-      }
+      const ids = []
+      const selector = mediaType === 'video' ? SELECTORS.video : SELECTORS.image
+      section.querySelectorAll(selector).forEach(el => {
+        const url = el.currentSrc || el.src
+        if (!url || mediaUrls[url]) return
+        ids.push(url)
+        mediaUrls[url] = { url, mediaType }
+      })
+      categories.push({ type, label: labelText, ids, mediaType })
     })
 
-    return categories
-  }
-
-  /* ── Collect all media URLs from preview carousel ────────── */
-  function collectAllMediaUrls(modal) {
-    const urls = {}
-    modal.querySelectorAll('.modal__preview div[data-index]').forEach(slide => {
-      const idx = slide.dataset.index
-      const img = slide.querySelector('img')
-      if (img && img.src) {
-        urls[idx] = { url: img.src, mediaType: 'image' }
-      }
-      const video = slide.querySelector('video')
-      if (video && video.src) {
-        urls[idx] = { url: video.src, mediaType: 'video' }
-      }
-    })
-    return urls
-  }
-
-  /* ── Resolve video indices from the carousel ──────────── */
-  function resolveVideoIndices(categories, mediaUrls) {
-    for (const cat of categories) {
-      if (cat.mediaType !== 'video') continue
-      const videoIndices = Object.entries(mediaUrls)
-        .filter(([, m]) => m.mediaType === 'video')
-        .map(([idx]) => parseInt(idx, 10))
-        .sort((a, b) => a - b)
-      cat.ids = videoIndices
-    }
+    return { categories, mediaUrls }
   }
 
   /* ── Build selection panel ──────────────────────────────── */
@@ -208,16 +259,25 @@ import openlaneCSS from './openlane.css?inline'
     footer.appendChild(dlBtn)
     panel.appendChild(footer)
 
-    // Overlay the gallery sidebar (not the full screen).  Fall back to body
-    // if the sidebar isn't found for some reason.
-    const sidebar = modal.querySelector('.modal__sidebar')
-    if (sidebar) {
-      // Ensure the sidebar can host an absolutely-positioned child without
-      // altering its own layout.
-      if (getComputedStyle(sidebar).position === 'static') {
-        sidebar.style.position = 'relative'
+    // Overlay the gallery sidebar (not the full screen).  The sidebar itself
+    // scrolls, so host the panel in its parent and match the sidebar's box —
+    // otherwise the panel would scroll away with the thumbnails.  Fall back
+    // to body if the sidebar isn't found for some reason.
+    const sidebar = modal.querySelector(SELECTORS.sidebar)
+    const host = sidebar && sidebar.parentElement
+    if (host) {
+      if (getComputedStyle(host).position === 'static') {
+        host.style.position = 'relative'
       }
-      sidebar.appendChild(panel)
+      Object.assign(panel.style, {
+        top: `${sidebar.offsetTop}px`,
+        left: `${sidebar.offsetLeft}px`,
+        width: `${sidebar.offsetWidth}px`,
+        height: `${sidebar.offsetHeight}px`,
+        right: 'auto',
+        bottom: 'auto',
+      })
+      host.appendChild(panel)
     } else {
       document.body.appendChild(panel)
     }
@@ -233,12 +293,8 @@ import openlaneCSS from './openlane.css?inline'
     dlBtn.disabled = true
     dlBtn.textContent = 'Fetching media…'
 
-    // Get vehicle name from modal header for zip filename
-    const header = modal.querySelector('.modal__header')
-    const titleEl = header ? queryByTagPrefix(header, 'ignite-typography-') : null
-    const vehicleName = titleEl ? titleEl.textContent.trim() : 'vehicle'
-    const carouselEl = queryByTagPrefix(document, 'ignite-photo-carousel-')
-    const vin = carouselEl ? carouselEl.getAttribute('vin') : null
+    const vehicleName = getVehicleName(modal)
+    const vin = findVin(modal)
     const vinSuffix = vin ? vin.slice(-6) : ''
 
     const zip = new JSZip()
@@ -350,61 +406,63 @@ import openlaneCSS from './openlane.css?inline'
     a.remove()
   }
 
-  /* ── Inject download button into modal header ───────────── */
-  function injectDownloadButton(modal) {
-    if (modal.querySelector('.ol-dl-btn')) return
-
-    const headerControl = modal.querySelector('.modal__header-control')
-    if (!headerControl) return
+  /* ── Inject download button into gallery header ──────────── */
+  function injectDownloadButton({ dialog, closeBtn }) {
+    if (dialog.querySelector('.ol-dl-btn')) return
 
     const btn = document.createElement('button')
+    btn.type = 'button'
     btn.className = 'ol-dl-btn'
     btn.title = 'Download gallery images'
+    btn.setAttribute('aria-label', 'Download gallery images')
     btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`
 
     btn.addEventListener('click', () => {
-      const categories = parseCategories(modal)
+      const { categories, mediaUrls } = parseGalleryData(dialog)
       if (categories.length === 0) {
-        console.warn(LOG, 'No media categories found')
+        console.warn(LOG, 'No media categories found — gallery sidebar selectors may have changed')
         return
       }
-      const mediaUrls = collectAllMediaUrls(modal)
-      resolveVideoIndices(categories, mediaUrls)
       console.log(LOG, `Found ${Object.keys(mediaUrls).length} media URLs`)
-      buildSelectionPanel(modal, categories, mediaUrls)
+      buildSelectionPanel(dialog, categories, mediaUrls)
     })
 
-    // Insert before the existing controls (escape/close)
-    headerControl.insertBefore(btn, headerControl.firstChild)
+    if (closeBtn && closeBtn.parentElement) {
+      // Sit right next to the close button
+      closeBtn.parentElement.insertBefore(btn, closeBtn)
+    } else {
+      // Anchor missing — still offer the feature via a floating button
+      if (!warnedAnchorMissing) {
+        console.warn(LOG, 'Close-button anchor not found — selectors may have changed; using floating button')
+        warnedAnchorMissing = true
+      }
+      btn.classList.add('ol-dl-btn--floating')
+      dialog.appendChild(btn)
+    }
     console.log(LOG, 'Download button injected')
   }
 
   /* ── Observe for gallery modal ──────────────────────────── */
-  function observeGalleryModal() {
-    const observer = new MutationObserver(() => {
-      const modal = document.querySelector('.modal__header')
-      if (modal) {
-        const modalRoot = modal.closest('.modal')
-        if (modalRoot && !modalRoot.querySelector('.ol-dl-btn')) {
-          injectDownloadButton(modalRoot)
-        }
-      } else {
-        // Modal is gone — drop any leftover selection panel so it doesn't
-        // overlay the next page.
-        const stalePanel = document.querySelector('.ol-dl-panel')
-        if (stalePanel) stalePanel.remove()
-      }
-    })
+  function checkForGallery() {
+    captureVin()
+    const gallery = findGallery()
+    if (gallery) {
+      injectDownloadButton(gallery)
+    } else {
+      // Gallery is gone — drop any leftover selection panel so it doesn't
+      // overlay the next page.
+      const stalePanel = document.querySelector('.ol-dl-panel')
+      if (stalePanel) stalePanel.remove()
+    }
+  }
 
+  function observeGalleryModal() {
+    const observer = new MutationObserver(checkForGallery)
     observer.observe(document.body, { childList: true, subtree: true })
     console.log(LOG, 'Observing for gallery modal')
 
-    // Also check immediately in case modal is already open
-    const modal = document.querySelector('.modal__header')
-    if (modal) {
-      const modalRoot = modal.closest('.modal')
-      if (modalRoot) injectDownloadButton(modalRoot)
-    }
+    // Also check immediately in case the gallery is already open
+    checkForGallery()
   }
 
   function getAccessToken() {

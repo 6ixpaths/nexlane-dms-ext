@@ -9,12 +9,21 @@
   color: inherit;
   cursor: pointer;
   padding: 4px 8px;
-  margin-right: 12px;
   transition: background 0.15s, border-color 0.15s;
 }
 .ol-dl-btn:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* Fallback when the header's close button can't be located */
+.ol-dl-btn--floating {
+  position: absolute;
+  top: 12px;
+  right: 64px;
+  z-index: 10001;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
 }
 
 /* ── Selection panel (overlays the gallery sidebar) ──── */
