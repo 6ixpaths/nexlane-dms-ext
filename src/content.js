@@ -9,8 +9,6 @@ import stylesCSS from './styles.css?inline'
     threadList: 'div[aria-label="Thread list"]',
     chatGrid: 'div[aria-label="Chats"][role="grid"]',
     threadLink: 'a[href*="/marketplace/t/"]',
-    sellingPageMain:
-      'div[aria-label="Collection of your marketplace items"][role="main"]',
     sellingPageBtn: 'div[role="button"][aria-label]',
   };
 
@@ -18,6 +16,7 @@ import stylesCSS from './styles.css?inline'
   // These are NOT listing names and must be filtered out during scraping.
   const ACTION_PREFIXES = [
     "Mark as sold ",
+    "Mark out of stock ",
     "Share ",
     "More options for ",
     "View insights for ",
@@ -171,22 +170,21 @@ import stylesCSS from './styles.css?inline'
    * Runs once when listing cards are present on /marketplace/you/selling.
    *
    * The selling page renders listing cards as:
-   *   <div role="main" aria-label="Collection of your marketplace items">
    *     <div role="button" aria-label="2016 Mazda Mazda3 GX">   ← listing card
    *       ... contains "Listed on 2/9" as a text node ...
    *     <div role="button" aria-label="Mark as sold 2016 Mazda Mazda3 GX">  ← action btn
    *
-   * We grab every div[role="button"][aria-label] inside the main container,
-   * filter out action-button prefixes, extract "Listed on X/Y" from each card,
+   * We grab every div[role="button"][aria-label] on the page (already scoped
+   * to the selling page via isSellingPage() before this runs — no need to
+   * additionally scope to a wrapping container, whose aria-label/role FB has
+   * changed before and is otherwise not load-bearing), filter out
+   * action-button prefixes, extract "Listed on X/Y" from each card,
    * de-duplicate, and persist to storage.
    */
   async function tryScrapeSellingPage() {
     if (hasScrapedSellingPage) return;
 
-    const main = document.querySelector(SELECTORS.sellingPageMain);
-    if (!main) return; // page not hydrated yet
-
-    const buttons = main.querySelectorAll(SELECTORS.sellingPageBtn);
+    const buttons = document.querySelectorAll(SELECTORS.sellingPageBtn);
     if (buttons.length === 0) return; // cards not rendered yet
 
     const listingMap = new Map(); // name (string) → listedOn (string|null)
@@ -700,14 +698,11 @@ import stylesCSS from './styles.css?inline'
    * scroll position doesn't change (true bottom reached).
    */
   async function scrollToLoadAllSellingListings() {
-    const main = document.querySelector(SELECTORS.sellingPageMain);
-    if (!main) return;
-
     // Configuration
     const SCROLL_DELAY = 1000; // Fallback wait when no loading indicator appears
     const MAX_STALE_RETRIES = 3; // Raised from 2 — slow connections need more patience
 
-    const getCardCount = () => main.querySelectorAll(SELECTORS.sellingPageBtn).length;
+    const getCardCount = () => document.querySelectorAll(SELECTORS.sellingPageBtn).length;
     const isLoading = () => !!document.querySelector('[aria-label="Loading..."]');
 
     let staleCount = 0;

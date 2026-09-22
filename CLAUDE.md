@@ -113,8 +113,7 @@ Three paths restore the flag in a chat-page tab:
 | `div[aria-label="Chats"][role="grid"]` | The scrollable list of threads |
 | `a[href*="/marketplace/t/"]` | Individual thread links |
 | `span.x1lliihq.x193iq5w…` | Thread title span (contains "Name · Listing Title") |
-| `div[aria-label="Collection of your marketplace items"][role="main"]` | Selling page container |
-| `div[role="button"][aria-label]` | Listing cards on selling page |
+| `div[role="button"][aria-label]` | Listing cards on selling page (scraper searches the whole document, scoped by URL via `isSellingPage()` rather than a wrapping container selector — FB has changed the container's aria-label/role before) |
 
 If the extension stops working, the most likely cause is Facebook changing one of these
 selectors. Check the browser console for `[MP Filter]` log lines to diagnose.
