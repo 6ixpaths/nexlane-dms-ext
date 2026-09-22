@@ -1,10 +1,18 @@
-# FB Marketplace Chat Filter — CLAUDE.md
+# Nexlane DMS Extension — CLAUDE.md
 
 ## Project Overview
 
-A browser extension (Chrome MV3 + Firefox MV2) that injects a filter dropdown into the
-Facebook Messenger/Marketplace chat sidebar. The dropdown is populated exclusively from
-listings scraped off the user's own selling page, letting them filter chats by listing name.
+**Nexlane DMS Extension** (repo: `nexlane-dms-ext`) is a browser extension (Chrome MV3 +
+Firefox MV2) with two feature sets:
+
+1. **Marketplace chat filter** (`src/content.js`) — injects a filter dropdown into the
+   Facebook Messenger/Marketplace chat sidebar. The dropdown is populated exclusively from
+   listings scraped off the user's own selling page, letting them filter chats by listing name.
+2. **Openlane tools** (`src/openlane.js`) — adds a ZIP download button to the
+   `app.openlane.ca` photo gallery, and relays the user's Openlane access token to a local
+   Nexlane service (`http://127.0.0.1:8000/openlane/token`) via `src/background.js`.
+
+Most of this file documents the Marketplace chat filter.
 
 Built with **Vite** + **CRXJS** for streamlined development with HMR (Hot Module Replacement)
 on Chrome and efficient builds for both browsers.
@@ -12,17 +20,19 @@ on Chrome and efficient builds for both browsers.
 ## File Structure
 
 ```
-fb-messenger/
+nexlane-dms-ext/
 ├── src/
-│   ├── content.js             # Main extension logic (content script)
-│   └── styles.css             # Injected CSS for the filter bar
+│   ├── content.js             # Marketplace chat filter (content script)
+│   ├── styles.css             # Injected CSS for the filter bar
+│   ├── openlane.js            # Openlane gallery downloader + token relay (content script)
+│   ├── openlane.css           # Injected CSS for the Openlane download UI
+│   └── background.js          # Downloads, token relay to 127.0.0.1, dev tab reloading
 ├── manifest.chrome.js         # Chrome MV3 manifest (CRXJS config)
 ├── manifest.firefox.js        # Firefox MV2 manifest (plain object)
 ├── vite.config.js             # Vite build config (conditionally loads manifests)
 ├── web-ext-config.mjs         # Firefox binary path + web-ext run defaults
 ├── package.json               # Dependencies: vite, @crxjs/vite-plugin, web-ext, concurrently
-├── test/
-│   └── index.html             # Local test page (no extension APIs needed)
+├── test/                      # Static HTML snapshots for local testing (no extension APIs needed)
 ├── dist-chrome/               # Chrome build output (generated, gitignored)
 ├── dist-firefox/              # Firefox build output (generated, gitignored)
 ├── icon48.png

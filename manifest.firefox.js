@@ -1,8 +1,8 @@
 export default {
   manifest_version: 2,
-  name: 'NEXLANE DMS',
+  name: 'Nexlane DMS Extension',
   version: '1.0.0',
-  description: 'Filter chats',
+  description: 'Facebook Marketplace chat filtering and Openlane gallery tools for Nexlane DMS',
   permissions: [
     "storage",
     "downloads",

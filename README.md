@@ -1,195 +1,200 @@
-# FB Marketplace Chat Filter
+# Nexlane DMS Extension
 
-A browser extension that filters Facebook Marketplace messenger chats by listing name.
+A browser extension (Chrome MV3 + Firefox MV2) that adds dealer workflow tools to the
+sites Nexlane DMS users work in every day:
 
-## What it does
+- **Facebook Marketplace / Messenger** — filter your Marketplace chats by the listing
+  they're about, using the listings on your own selling page.
+- **Openlane (`app.openlane.ca`)** — download a vehicle's photo gallery as a ZIP, and hand
+  your Openlane session token to a locally running Nexlane service.
 
-When you're selling multiple items on Facebook Marketplace and have dozens of chats, this extension makes it easy to organize and filter conversations by the item being sold.
+Both features ship in one extension, built from a shared `src/` folder with Vite + CRXJS.
 
-**Features:**
-- 📋 **Auto-detect listings** — Scans your thread list and extracts unique listing names
-- 🔍 **Quick filter dropdown** — Select a listing to show only conversations about that item
-- 🔄 **Auto-scroll loader** — Click "Load More" to automatically scroll and load at least 50 message threads (useful for lazy-loaded lists)
-- ♻️ **Refresh button** — Update listings if new chats arrive
-- ⏳ **Loading state** — Shows a spinner while threads are being scanned
-- 🌙 **Dark mode support** — Adapts to your Facebook theme
-
-**Example:**
-- Chat shows: `Nav · 2016 Mazda Mazda3 GX`
-- Extension extracts: `2016 Mazda Mazda3 GX`
-- Filter dropdown includes: `2016 Mazda Mazda3 GX (3 chats)`
+---
 
 ## How it works
 
-The extension injects a filter bar below the "Marketplace" heading in your Messenger sidebar:
+### 1. Marketplace chat filter (`src/content.js`)
+
+Runs on `facebook.com/marketplace/*`, `facebook.com/messages/*` and `messenger.com/*`.
 
 ```
-┌─────────────────────────────────────┐
-│ Marketplace                         │
-├─────────────────────────────────────┤
-│ [All Listings ▼] [↻] [Load More]   │
-│ 20 thread(s), 5 listing(s)          │
-├─────────────────────────────────────┤
-│ Don · 2009 Lexus RX 350             │
-│ Nav · 2016 Mazda Mazda3 GX          │
-│ ...                                 │
-└─────────────────────────────────────┘
+Selling page tab                          Chat page tab
+────────────────                          ─────────────
+/marketplace/you/selling                  Messenger / Marketplace inbox
+  │ auto-scrolls until every card loads     │
+  │ scrapes listing names + "Listed on"     │  "Filters inactive — Open your
+  ▼                                         │   selling page to load listings."
+chrome.storage.local ──────────────────────▶│
+  mp_filter_listings_v1  (listings)         ▼
+  mp_filter_session_v1   (timestamp)      Dropdown activates
 ```
 
-**Parsing:** Thread names are in the format `FirstName · ItemListing`. The extension splits on the `·` separator to extract the listing name.
+1. **Open the chat page.** A filter bar is injected under the chat sidebar header. Until
+   listings are loaded it shows *"Filters inactive — Open your selling page to load
+   listings."* with a link.
+2. **Open your selling page** (`/marketplace/you/selling`), in the same tab or a new one.
+   The extension scrolls the page until all listing cards have loaded, reads each
+   listing's title (skipping action buttons like "Mark as sold …" / "Share …"), and saves
+   them to extension storage. A blue badge confirms how many listings were saved.
+3. **The chat page activates.** In Chrome this happens immediately (`storage.onChanged`);
+   in Firefox within ~1.5 s (a heartbeat polls storage, since `onChanged` doesn't fire in
+   Firefox content scripts).
+4. **Pick a filter.** Chats that don't match are hidden instantly — no scrolling or
+   reloading.
 
-**Filtering:** When you select a listing from the dropdown, all other threads are hidden with `display: none`. Select "All Listings" to show everything again.
+**Dropdown options**
 
-**Auto-scroll:** The "Load More" button triggers automatic scrolling to the bottom of the thread list, pausing 800ms between scrolls to let Facebook load new conversations. It stops after reaching 50 threads or detecting no new threads were loaded.
+| Option | Shows |
+|---|---|
+| All listings | Every chat, unfiltered |
+| My Listings (N) | Chats for any of your selling listings |
+| *Listing title (count)* | Only chats about that listing |
+| Buying Listings (count) | Chats where you're the buyer, plus a search box to narrow them |
 
-**Lazy loading support:** A MutationObserver watches for new threads being added to the DOM and automatically refreshes the listings dropdown.
+**How chats are matched:** Marketplace thread titles look like `Name · Listing Title`.
+The extension takes the part after `·` and matches it (case- and whitespace-insensitive,
+allowing for FB's truncated titles) against your saved selling listings. The dropdown
+only ever offers listings that exist on your selling page — never names guessed from
+chat titles. When you open a chat, the extension also detects from the chat panel
+whether you're selling or buying, which picks up sold items no longer on the selling
+page.
 
-## Installation & Development
+**Session gating:** Saved listings are only used for **8 hours** after your last visit to
+the selling page. After that the filter goes back to "inactive" until you visit it
+again, so the dropdown never silently runs on stale listings.
 
-This project uses **Vite** with **CRXJS** for building and **HMR** (Hot Module Replacement) for instant development reloads.
+### 2. Openlane gallery downloader (`src/openlane.js`)
 
-### Setup
+Runs on `app.openlane.ca/*`.
+
+1. Open a vehicle and its **photo gallery**. A download button appears next to the
+   gallery's close button.
+2. Click it to open a selection panel grouped by category (overview, condition, video).
+   Choose the photos/videos you want.
+3. The extension fetches the selected media and builds a ZIP named
+   `<Vehicle name> <last 6 of VIN>.zip`. Files are ordered overview → condition → video,
+   and timestamped so they also sort in that order by date modified.
+
+The download goes through the background script (`chrome.downloads`) to avoid the page's
+CSP restrictions on `blob:` URLs.
+
+### 3. Openlane token relay (`src/openlane.js` → `src/background.js`)
+
+On page load, the extension reads your Openlane access token from the page's
+`localStorage` (`dmp-okta-token`) and sends it to a local Nexlane service at
+`http://127.0.0.1:8000/openlane/token`. This lets the local Nexlane market guide call
+Openlane as you. The request goes through the background script, since an HTTPS page
+can't call an HTTP loopback address directly (mixed content).
+
+If nothing is listening on port 8000 the push just fails and logs an error — the rest of
+the extension is unaffected.
+
+---
+
+## Installation & development
+
+Built with **Vite** + **CRXJS** (HMR on Chrome) and **web-ext** (auto-reload on Firefox).
 
 ```bash
 npm install
 ```
 
-### Development
+### Chrome (with HMR)
 
-**Chrome (with HMR):**
 ```bash
 npm run dev
 ```
-Then load `dist-chrome/` as an unpacked extension in `chrome://extensions/`.
 
-Changes to `src/content.js` or `src/styles.css` automatically trigger HMR and reload the extension!
+Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select
+`dist-chrome/`. Edits to `src/` reload the extension and any open Facebook tabs
+automatically.
 
-**Firefox (with auto-reload):**
+### Firefox (with auto-reload)
+
 ```bash
 npm run dev:firefox
 ```
-This does an initial build, then runs Vite in watch mode and `web-ext` in parallel. `web-ext` launches Firefox automatically with the extension loaded and **reloads it whenever `dist-firefox/` changes** — no manual steps needed.
 
-> **First time setup:** Check `web-ext-config.mjs` and update the `firefox` path if needed (e.g. if you use Firefox Release instead of Developer Edition).
+Builds once, then runs Vite in watch mode alongside `web-ext`, which launches Firefox with
+the extension loaded and reloads it whenever `dist-firefox/` changes.
 
-### Building for Production
+> **First run:** set the `firefox` binary path in `web-ext-config.mjs` if yours isn't at
+> the default location.
 
-**Chrome:**
+### Production builds
+
 ```bash
 npm run build
 ```
 
-**Firefox:**
 ```bash
 npm run build:firefox
 ```
 
-Output appears in `dist-chrome/` or `dist-firefox/` depending on the target.
+Output goes to `dist-chrome/` (MV3) or `dist-firefox/` (MV2). To install a build manually:
 
-### Manual Installation (without Vite)
-
-**Chrome (Manifest V3):**
-1. Open `chrome://extensions/`
-2. Enable **Developer mode** (toggle in top-right corner)
-3. Click **Load unpacked**
-4. Select the `dist-chrome/` folder (after running `npm run build`)
-5. Navigate to [Facebook Marketplace Messages](https://www.facebook.com/marketplace/)
-
-**Firefox (Manifest V2):**
-1. Open `about:debugging#/runtime/this-firefox`
-2. Click **Load Temporary Add-on...**
-3. Select `dist-firefox/manifest.json` (after running `npm run build:firefox`)
-4. Navigate to [Facebook Marketplace Messages](https://www.facebook.com/marketplace/)
-
-## Project Structure
-
-```
-fb-messenger/
-├── src/
-│   ├── content.js         # Main extension logic (content script)
-│   └── styles.css         # Filter bar styling
-├── manifest.chrome.js     # Chrome MV3 manifest config
-├── manifest.firefox.js    # Firefox MV2 manifest config
-├── vite.config.js         # Vite build configuration
-├── web-ext-config.mjs     # Firefox binary path + web-ext defaults
-├── package.json           # Dependencies & scripts
-├── test/
-│   └── index.html         # Local test page
-├── dist-chrome/           # Chrome build output (generated, gitignored)
-└── dist-firefox/          # Firefox build output (generated, gitignored)
-```
-
-The `src/` files are shared between both browsers. The `BROWSER` env var controls which manifest and output folder Vite uses.
-
-## How the extension finds listings
-
-The extension looks for:
-1. Links with `href="/marketplace/t/NUMBER"` (marketplace thread IDs)
-2. Within each thread row, a span containing `FirstName · ListingName` format
-3. Extracts everything after the `·` separator as the listing name
-4. Removes duplicates and sorts alphabetically
-
-## UI Elements
-
-| Element | Purpose |
-|---------|---------|
-| **Dropdown** | Select a listing to filter by, or "All Listings" to show everything |
-| **↻ Button** | Refresh the listings if new chats arrive |
-| **Load More** | Auto-scroll to load at least 50 message threads from the lazy-loaded list |
-| **Status text** | Shows thread count and unique listing count |
-
-## Troubleshooting
-
-**Filter bar doesn't appear?**
-- Make sure you're on the [Facebook Marketplace Messages](https://www.facebook.com/marketplace/) page
-- The extension needs a few seconds to scan threads after the page loads
-- Try refreshing the page
-- Check browser console (F12 → Console) for errors
-
-**"Can't read and change data on this site" (Firefox)?**
-- You may have declined the permission prompt
-- Go to `about:addons`, find "FB Marketplace Chat Filter"
-- Click the extension menu and check "Manage" → "Permissions"
-- Make sure it's allowed on `facebook.com`
-
-**Listings not showing?**
-- Make sure your chats follow the `Name · Item` format
-- If chats are still loading, wait a moment and click the ↻ button
-- Use "Load More" to scroll and load more threads
-
-**Dark mode not working?**
-- The extension uses Facebook's CSS custom properties for theming
-- It should auto-adapt to your Facebook dark mode setting
-
-## Privacy & Permissions
-
-This extension:
-- ✅ Only works on `facebook.com/marketplace/*`, `facebook.com/messages/*`, and `messenger.com`
-- ✅ Reads only the text visible in your chat list sidebar (thread names and listing titles)
-- ✅ Does **not** send data anywhere — all filtering happens locally in your browser
-- ✅ Does **not** modify your messages or chats
-- ✅ Does **not** track you or store your data
-
-## Browser compatibility
-
-| Browser | Version | Status |
-|---------|---------|--------|
-| Chrome | 88+ | ✅ Supported |
-| Firefox | 109+ | ✅ Supported (temporary add-on) |
-| Safari | — | ❌ Not supported (would need webkit extension API) |
-| Edge | 88+ | ✅ Supported (use Chrome version) |
-
-## Tips
-
-- **Bulk delete/archive:** Once you've filtered to a single listing, you can archive multiple chats at once
-- **Fast switching:** Filter to a listing, respond to messages, then switch to another listing with one click
-- **Load More before replying:** If you know you're missing chats, click "Load More" before starting your workflow
-- **Check "Showing X chats":** The status bar tells you how many threads match your current filter
-
-## License
-
-This extension is provided as-is for personal use.
+- **Chrome:** `chrome://extensions` → Developer mode → **Load unpacked** → `dist-chrome/`
+- **Firefox:** `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** →
+  `dist-firefox/manifest.json`
 
 ---
 
-**Questions or issues?** Check the troubleshooting section above or refer to the browser's developer tools (F12) to debug.
+## Project structure
+
+```
+nexlane-dms-ext/
+├── src/
+│   ├── content.js           # Marketplace chat filter (content script)
+│   ├── styles.css           # Filter bar styles
+│   ├── openlane.js          # Openlane gallery downloader + token relay (content script)
+│   ├── openlane.css         # Download button / selection panel styles
+│   └── background.js        # Downloads, token relay, dev tab reloading
+├── manifest.chrome.js       # Chrome MV3 manifest (CRXJS)
+├── manifest.firefox.js      # Firefox MV2 manifest
+├── vite.config.js           # Picks manifest + output dir from BROWSER env var
+├── web-ext-config.mjs       # Firefox binary path + web-ext defaults
+├── test/                    # Static HTML snapshots for local testing
+├── dist-chrome/             # Chrome build output (generated, gitignored)
+└── dist-firefox/            # Firefox build output (generated, gitignored)
+```
+
+---
+
+## Troubleshooting
+
+Both features depend on the DOM of sites we don't control, so a site redesign is the most
+likely cause of breakage. Open DevTools (F12) → Console and look for the log prefixes:
+
+| Prefix | Feature |
+|---|---|
+| `[MP Filter]` | Marketplace chat filter |
+| `[OL Downloader]` | Openlane downloader, token relay, background script |
+
+**Filter bar missing or says "inactive"**
+- Visit your selling page again (the 8-hour window may have expired).
+- Make sure the selling page finished scrolling and showed the blue "listings saved" badge.
+- Refresh the chat page.
+
+**A listing is missing from the dropdown**
+- It must appear on your selling page. Sold/removed items only show up after you open a
+  chat about them.
+
+**Openlane download button missing**
+- Check the console for `[OL Downloader]` warnings about selectors. If the header anchor
+  isn't found, the button falls back to a floating position inside the gallery.
+
+**Firefox: "Can't read and change data on this site"**
+- Go to `about:addons` → **Nexlane DMS Extension** → **Permissions** and allow the
+  Facebook / Openlane sites.
+
+---
+
+## Privacy & permissions
+
+- Runs only on Facebook Marketplace/Messenger, Messenger.com and Openlane.
+- Marketplace listing names are stored locally in extension storage and never leave your
+  browser.
+- The Openlane access token is sent **only** to `127.0.0.1:8000` on your own machine —
+  never to a remote server.
+- Openlane media is fetched from Openlane's own CDN and saved to your Downloads folder.
