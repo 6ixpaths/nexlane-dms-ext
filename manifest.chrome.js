@@ -10,7 +10,9 @@ export default defineManifest(({ mode }) => ({
     "https://www.facebook.com/*",
     "https://www.messenger.com/*",
     "https://app.openlane.ca/*",
-    "https://pub-us.kar-media.com/*"
+    "https://pub-us.kar-media.com/*",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
   ],
   background: {
     service_worker: 'src/background.js',

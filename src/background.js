@@ -45,15 +45,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // page's origin and are subject to ordinary mixed-content blocking, so an
   // https://app.openlane.ca page can't fetch() http://127.0.0.1. Only this
   // privileged background context gets the host_permissions bypass.
-  if (msg.type === 'PUSH_OPENLANE_TOKEN' && msg.token) {
-    fetch('http://127.0.0.1:8000/openlane/token', {
+  if (msg.type === 'PUSH_OPENLANE_TOKEN' && msg.tokenBlob) {
+    // Pushed verbatim — the backend now parses Okta's own token-storage
+    // shape (access/id/refresh) directly, so no re-wrapping here.
+    fetch('http://127.0.0.1:8000/openlane/token/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        accessToken: msg.token,
-        source: 'firefox-extension',
-        timestamp: Date.now(),
-      }),
+      body: JSON.stringify(msg.tokenBlob),
     })
       .then((response) => {
         console.log('[OL Downloader] Token push status:', response.status)

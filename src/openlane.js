@@ -465,40 +465,38 @@ import openlaneCSS from './openlane.css?inline'
     checkForGallery()
   }
 
-  function getAccessToken() {
+  function getOktaTokenBlob() {
     try {
-      // 1. Fetch raw string from page's localStorage
-      const rawData = window.localStorage.getItem('dmp-okta-token');
+      // Okta's SDK stores the full token set (access + id + refresh) under
+      // this key. Pushing it verbatim lets the backend refresh proactively
+      // instead of needing a fresh visit to OpenLane roughly every 24h.
+      const rawData = window.localStorage.getItem('okta-token-storage');
       if (!rawData) return null;
 
-      // 2. Parse JSON
-      const parsedData = JSON.parse(rawData);
-
-      // 3. Return accessToken
-      return parsedData?.accessToken || null;
+      return JSON.parse(rawData);
     } catch (error) {
-      console.error('Failed to extract token:', error);
+      console.error('Failed to extract Okta token storage:', error);
       return null;
     }
   }
 
   /**
-   * Sends the extracted access token to the local Django receiver via the
-   * background script. A content script fetch here would run under the
+   * Sends the raw Okta token-storage blob to the local Django receiver via
+   * the background script. A content script fetch here would run under the
    * page's https://app.openlane.ca origin and get blocked as mixed content
    * — only the privileged background context can reach http://127.0.0.1.
-   * @param {string} token - The OAuth/Okta access token.
+   * @param {object} tokenBlob - The parsed `okta-token-storage` value.
    * @returns {Promise<boolean>} - Resolves to true if the request succeeded.
    */
-  async function sendTokenToLoopback(token) {
-    if (!token) {
-      console.error('No token provided to sendTokenToLoopback.');
+  async function sendTokenToLoopback(tokenBlob) {
+    if (!tokenBlob) {
+      console.error('No token blob provided to sendTokenToLoopback.');
       return false;
     }
 
     try {
       const response = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ type: 'PUSH_OPENLANE_TOKEN', token }, (resp) => {
+        chrome.runtime.sendMessage({ type: 'PUSH_OPENLANE_TOKEN', tokenBlob }, (resp) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
           } else {
@@ -511,7 +509,7 @@ import openlaneCSS from './openlane.css?inline'
         console.log('Successfully transmitted token to loopback receiver.');
         return true;
       } else {
-        console.error(`Failed to send token. Server responded with status: ${response && response.status}`);
+        console.error(`Failed to send token. Server responded with status: ${response && response.status}${response && response.error ? ` (${response.error})` : ''}`);
         return false;
       }
     } catch (error) {
@@ -527,10 +525,10 @@ import openlaneCSS from './openlane.css?inline'
 
     console.log(LOG, 'Initialized')
 
-    const accessToken = getAccessToken();
-    console.log('Access Token:', accessToken);
-    if (accessToken) {
-      sendTokenToLoopback(accessToken);
+    const tokenBlob = getOktaTokenBlob();
+    console.log(LOG, 'Okta token storage found:', !!tokenBlob);
+    if (tokenBlob) {
+      sendTokenToLoopback(tokenBlob);
     }
   }
 
