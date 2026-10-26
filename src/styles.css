@@ -87,6 +87,44 @@
   cursor: not-allowed;
 }
 
+/* ── Unread pill (toggle next to the dropdown) ────────────────────────── */
+
+#mp-chat-filter-unread {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--media-inner-border, #ccd0d5);
+  border-radius: 999px;
+  background: var(--surface-background, #ffffff);
+  color: var(--primary-text, #050505);
+  font-size: 13px;
+  font-family: Segoe UI, Helvetica, Arial, sans-serif;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+#mp-chat-filter-unread:hover {
+  background: var(--wash, #f0f2f5);
+}
+
+#mp-chat-filter-unread:focus-visible {
+  outline: none;
+  border-color: #1877f2;
+  box-shadow: 0 0 0 2px rgba(24, 119, 242, 0.2);
+}
+
+#mp-chat-filter-unread[aria-pressed="true"] {
+  background: #1877f2;
+  border-color: #1877f2;
+  color: #ffffff;
+}
+
+#mp-chat-filter-unread[aria-pressed="true"]:hover {
+  background: #1558b0;
+  border-color: #1558b0;
+}
+
 /* ── Buying search row (inside #mp-chat-filter, below the dropdown row) ─ */
 
 #mp-chat-filter-search-row {
