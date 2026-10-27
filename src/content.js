@@ -366,6 +366,37 @@ import stylesCSS from './styles.css?inline'
     return new Set(storedSellingListings.map((l) => l.name.toLowerCase()));
   }
 
+  const normalizeListingName = (str) => str?.toLowerCase().trim().replace(/\s+/g, " ") ?? "";
+
+  /**
+   * True when a thread's listing name matches a listing title, using the
+   * same rules as the per-listing filter: case/whitespace-insensitive, and
+   * a prefix match either way to cover titles FB truncates in the thread UI.
+   */
+  function listingNamesMatch(rowName, listingName) {
+    const a = normalizeListingName(rowName);
+    const b = normalizeListingName(listingName);
+    if (!a || !b) return false;
+    return a === b || a.startsWith(b) || b.startsWith(a);
+  }
+
+  /** True when the thread's listing name matches any stored selling listing. */
+  function isKnownSellingListing(rowName) {
+    if (!rowName || !storedSellingListings) return false;
+    return storedSellingListings.some((l) => listingNamesMatch(rowName, l.name));
+  }
+
+  /**
+   * Classifies a thread as buying. The stored selling list is authoritative:
+   * a thread whose listing name matches a selling listing is never buying.
+   * Any other thread with a readable listing name is buying. The DOM
+   * heuristic is only consulted when the listing name can't be parsed.
+   */
+  function isBuyingRow(row, rowName) {
+    if (rowName) return !isKnownSellingListing(rowName);
+    return isBuyingThread(row) ?? true;
+  }
+
   /**
    * Returns sorted listing names (strings) for the dropdown — exclusively
    * from the selling-page scraper data stored in storedSellingListings.
@@ -523,7 +554,6 @@ import stylesCSS from './styles.css?inline'
       if (!row) return;
 
       const rowName = extractListingName(parseThreadName({ row }))?.toLowerCase();
-      const isBuyingDom = isBuyingThread(row);
       const query = buyingSearchQuery.trim().toLowerCase();
 
       let shouldShow = true;
@@ -531,29 +561,13 @@ import stylesCSS from './styles.css?inline'
       if (listing === "ALL_LISTINGS") {
         shouldShow = true;
       } else if (listing === "BUYING_LISTINGS") {
-        const isBuying = isBuyingDom ?? (!rowName || !sellingListingsLowerCase?.has(rowName));
-        shouldShow = isBuying && (!query || !!rowName?.includes(query));
+        shouldShow = isBuyingRow(row, rowName) && (!query || !!rowName?.includes(query));
       } else if (listing) {
-        // Normalize both sides: collapse whitespace, trim, lowercase.
-        // Handles invisible Unicode differences between the selling page
-        // aria-label and the thread textContent.
-        const normalize = str => str?.toLowerCase().trim().replace(/\s+/g, ' ') ?? '';
-        const normalizedRow = normalize(rowName);
-        const normalizedListing = normalize(listing);
-
-        // Match if equal OR if one is a prefix of the other — covers cases
-        // where Facebook truncates long listing titles in the thread UI.
-        const nameMatches = normalizedRow === normalizedListing
-          || normalizedListing.startsWith(normalizedRow)
-          || normalizedRow.startsWith(normalizedListing);
-
-        // Name match takes priority over isBuyingThread() classification.
         // The dropdown only contains selling listings, so a matching name
-        // IS a selling thread — buying heuristics can misfire on threads
-        // with square product thumbnails (s133x133 false positive).
-        shouldShow = nameMatches;
+        // IS a selling thread.
+        shouldShow = listingNamesMatch(rowName, listing);
       } else if (sellingListingsLowerCase) {
-        shouldShow = !!rowName && sellingListingsLowerCase.has(rowName);
+        shouldShow = isKnownSellingListing(rowName);
       }
 
       // Unread pill narrows the listing selection. The open thread stays
@@ -711,24 +725,12 @@ import stylesCSS from './styles.css?inline'
 
     // 2. Pre-calculate Counts (One pass for performance)
     const threads = getThreadItems();
-    const sellSet = sellingListingsLowerCase;
 
-    const normalize = str => str?.toLowerCase().trim().replace(/\s+/g, ' ') ?? '';
-
+    // Mirror filterListing() so counts match the rows shown.
     const getCount = (listing) => threads.filter(({ row }) => {
       const rawName = extractListingName(parseThreadName({ row }));
-      const nameLower = rawName?.toLowerCase();
-      const isBuying = isBuyingThread(row) ?? (!nameLower || !sellSet?.has(nameLower));
-
-      if (listing === "BUYING_LISTINGS") return isBuying;
-
-      // Mirror filterListing() — normalize and use prefix matching so
-      // truncated thread titles and whitespace differences still count.
-      const normalizedRow = normalize(rawName);
-      const normalizedListing = normalize(listing);
-      return normalizedRow === normalizedListing
-        || normalizedListing.startsWith(normalizedRow)
-        || normalizedRow.startsWith(normalizedListing);
+      if (listing === "BUYING_LISTINGS") return isBuyingRow(row, rawName);
+      return listingNamesMatch(rawName, listing);
     }).length;
 
     // 3. Build Options via Template Strings
