@@ -39,6 +39,7 @@ import stylesCSS from './styles.css?inline'
   // "browser session" semantics without requiring chrome.storage.session
   // (which is not reliably accessible from content scripts).
   const SESSION_FLAG_KEY = "mp_filter_session_v1";
+  const SESSION_TTL_MS = 8 * 3600 * 1000;
 
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -189,9 +190,14 @@ import stylesCSS from './styles.css?inline'
    * changed before and is otherwise not load-bearing), filter out
    * action-button prefixes, extract "Listed on X/Y" from each card,
    * de-duplicate, and persist to storage.
+   *
+   * Safe to call repeatedly: FB lazy-loads more cards as the page scrolls,
+   * so observeSellingPageRescrape() re-runs this and each pass merges new
+   * cards in. Stored listings saved within the current session window are
+   * kept (sold/pending stock with recent chats stays known); listings from
+   * an expired session are replaced.
    */
   async function tryScrapeSellingPage() {
-    if (hasScrapedSellingPage) return;
 
     const buttons = document.querySelectorAll(SELECTORS.sellingPageBtn);
     if (buttons.length === 0) return; // cards not rendered yet
@@ -227,15 +233,24 @@ import stylesCSS from './styles.css?inline'
     hasScrapedSellingPage = true;
     markSellingPageVisited(); // idempotent — may already be set via URL detection
 
+    const existing = await readPersistedListings();
+    const sameSession = existing.savedAt && (Date.now() - existing.savedAt) < SESSION_TTL_MS;
+    if (sameSession) {
+      for (const { name, listedOn } of normalizeSelling(existing.selling)) {
+        if (!listingMap.has(name)) listingMap.set(name, listedOn);
+      }
+    }
+
     const selling = Array.from(listingMap.entries()).map(([name, listedOn]) => ({
       name,
       listedOn,
     }));
+    const unchanged = sameSession && selling.length === (existing.selling || []).length;
     storedSellingListings = selling;
     sellingListingsLowerCase = getSellingListingsLowercase();
+    if (unchanged) return; // nothing new — skip the write and the badge
 
     // Merge buying listings we may have captured via open-chat detection
-    const existing = await readPersistedListings();
     await persistListings({ selling, buying: existing.buying || [] });
 
     console.log(
@@ -618,7 +633,7 @@ import stylesCSS from './styles.css?inline'
     container.innerHTML = `
         <div id="mp-chat-filter-row1">
             <span id="mp-chat-filter-info">
-                Filters inactive — <a id="mp-chat-filter-info-link" href="https://www.facebook.com/marketplace/you/selling?state=LIVE&status%5B0%5D=IN_STOCK" target="_blank" rel="noopener noreferrer">Open your selling page</a> to load listings.
+                Filters inactive — <a id="mp-chat-filter-info-link" href="https://www.facebook.com/marketplace/you/selling" target="_blank" rel="noopener noreferrer">Open your selling page</a> to load listings.
             </span>
             <select id="mp-chat-filter-select">
                 <option value="ALL_LISTINGS">All listings</option>
@@ -834,6 +849,7 @@ import stylesCSS from './styles.css?inline'
         (async () => {
           await scrollToLoadAllSellingListings();
           await tryScrapeSellingPage();
+          observeSellingPageRescrape();
         })();
       }
     });
@@ -841,6 +857,28 @@ import stylesCSS from './styles.css?inline'
     // Watch the whole document for listing cards to appear
     hydrationObserver.observe(document.body, { childList: true, subtree: true });
     console.log("[MP Filter] Watching for selling page DOM hydration...");
+  }
+
+  let sellingRescrapeObserver = null;
+
+  /**
+   * Keeps scraping while the user stays on the selling page, so cards FB
+   * loads later (manual scrolling, slow connections) are merged into storage.
+   * Disconnects when the user navigates away.
+   */
+  function observeSellingPageRescrape() {
+    if (sellingRescrapeObserver || !isSellingPage()) return;
+    let timer = null;
+    sellingRescrapeObserver = new MutationObserver(() => {
+      if (!isSellingPage()) {
+        sellingRescrapeObserver.disconnect();
+        sellingRescrapeObserver = null;
+        return;
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => tryScrapeSellingPage(), 1000);
+    });
+    sellingRescrapeObserver.observe(document.body, { childList: true, subtree: true });
   }
 
   // ── Mutation observer (lazy-loaded threads) ───────────────────────────
@@ -944,7 +982,7 @@ import stylesCSS from './styles.css?inline'
     storedSellingListings = normalizeSelling(stored.selling);
     console.log(storedSellingListings);
     const flagTs = flagData[SESSION_FLAG_KEY];
-    if (flagTs && (Date.now() - flagTs) < 8 * 3600 * 1000) {
+    if (flagTs && (Date.now() - flagTs) < SESSION_TTL_MS) {
       sellingPageVisitedThisSession = true;
       console.log("[MP Filter] Session flag restored — selling page visited this session.");
     }
@@ -1016,7 +1054,7 @@ import stylesCSS from './styles.css?inline'
       readPersistedListings(),
     ]).then(([flagData, stored]) => {
       const ts = flagData[SESSION_FLAG_KEY];
-      if (ts && (Date.now() - ts) < 8 * 3600 * 1000) {
+      if (ts && (Date.now() - ts) < SESSION_TTL_MS) {
         storedSellingListings = normalizeSelling(stored.selling);
         sellingPageVisitedThisSession = true;
         sellingListingsLowerCase = getSellingListingsLowercase();
@@ -1061,7 +1099,7 @@ import stylesCSS from './styles.css?inline'
       _storage.get(SESSION_FLAG_KEY)
         .then((d) => {
           const ts = d[SESSION_FLAG_KEY];
-          if (ts && (Date.now() - ts) < 8 * 3600 * 1000 && !sellingPageVisitedThisSession) {
+          if (ts && (Date.now() - ts) < SESSION_TTL_MS && !sellingPageVisitedThisSession) {
             sellingPageVisitedThisSession = true;
             console.log("[MP Filter] Session flag detected via navigation — activating filter.");
           }
