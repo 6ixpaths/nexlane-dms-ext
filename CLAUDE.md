@@ -206,6 +206,15 @@ The `injectStyles()` function in the IIFE injects the CSS into `document.head` o
   selling data
 - **`getUniqueListings()`** intersects thread names with stored selling names — the
   dropdown never shows thread names that aren't in the stored selling list
+- **Buying classification** (`isBuyingRow()`): the stored selling list is authoritative — a
+  thread whose listing name matches a selling listing (`listingNamesMatch()`: case/whitespace
+  insensitive, prefix match either way) is never shown under Buying Listings. The DOM heuristic
+  `isBuyingThread()` (thumbnail crop, image count) is only a fallback when the listing name
+  can't be parsed — it misfires on seller rows. The full-row hover overlay is not a signal:
+  FB renders it on every row
+- **Selling-page scraping** keeps running while the user is on the page
+  (`observeSellingPageRescrape()`), merging lazy-loaded cards. Listings saved within the 8-hour
+  session window are kept; an expired session's list is replaced
 - **`normalizeSelling(arr)`** converts legacy `string` entries in storage to
   `{ name, listedOn: null }` objects for backward compatibility
 - **ACTION_PREFIXES** must stay in sync with Facebook's aria-label patterns for selling-page
