@@ -309,8 +309,8 @@ import openlaneCSS from './openlane.css?inline'
 
     // Base date used to stamp each file with a sequentially earlier timestamp.
     // overview_1 gets the most recent timestamp, and each subsequent file
-    // (overview → condition → video, 1…N within each category) is one second
-    // older, so overview_1 sorts first when the ZIP is viewed by "last modified".
+    // (overview → condition → video, 1…N within each category) is two seconds
+    // older (ZIP stores times at 2 s resolution), so overview_1 sorts first when the ZIP is viewed by "last modified".
     const BASE_DATE = new Date('2000-01-01T00:00:00')
     let fileSeq = 0
 
@@ -349,7 +349,7 @@ import openlaneCSS from './openlane.css?inline'
           ext = contentType.includes('png') ? 'png' : 'jpg'
         }
         const filename = `${category}_${categoryCounters[category]}.${ext}`
-        const fileDate = new Date(BASE_DATE.getTime() + (sorted.length - fileSeq) * 1000)
+        const fileDate = new Date(BASE_DATE.getTime() + (sorted.length - fileSeq) * 2000)
         fileSeq++
         zip.file(filename, buf, { date: fileDate })
         added++
