@@ -449,12 +449,14 @@ import stylesCSS from './styles.css?inline'
    *   ≥ 2 <img> in the row = buying (listing thumbnail + seller profile overlay)
    *   1  <img> in the row  = selling (listing photo only)
    *
-   * Signal 3 — structural overlay div inside the <a> element:
-   *   div[data-visualcompletion="ignore"][style*="inset"] inside the link
-   *   = buying (full-row click-overlay unique to buying thread cards)
+   * The full-row hover overlay (div[data-visualcompletion="ignore"][style*="inset"])
+   * is NOT used: FB renders it on selling and buying rows alike.
    *
-   * Returns true (buying) | false (selling) | null (inconclusive).
-   * When null the caller should fall back to selling-set negation.
+   * These signals misfire on selling threads too (s133x133 thumbnails appear
+   * on seller rows), so callers only use this when the listing name can't be
+   * parsed — see isBuyingRow().
+   *
+   * Returns true (buying) | false (not a thread) | null (inconclusive).
    */
   function isBuyingThread(row) {
     const link = row.querySelector('a[href*="/marketplace/t/"]');
@@ -473,11 +475,6 @@ import stylesCSS from './styles.css?inline'
 
     // Signal 2: total <img> count in the row
     if (row.querySelectorAll("img").length >= 2) return true;
-
-    // Signal 3: full-row hover-overlay div inside <a> (buying-card specific)
-    if (link.querySelector('[data-visualcompletion="ignore"][style*="inset"]')) {
-      return true;
-    }
 
     return null; // inconclusive — caller uses selling-set fallback
   }
