@@ -123,6 +123,9 @@ Three paths restore the flag in a chat-page tab:
 | `div[aria-label="Chats"][role="grid"]` | The scrollable list of threads |
 | `a[href*="/marketplace/t/"]` | Individual thread links |
 | `span.x1lliihq.x193iq5w…` | Thread title span (contains "Name · Listing Title") |
+| Leaf element with text `Unread message:` inside the thread link | Unread thread (primary signal for the Unread pill; English UI only) |
+| `span.x1s688f` inside the thread link | Unread thread fallback (bold title; read rows use `xk50ysn`) |
+| `a[aria-current="page"]` | Currently open thread (kept visible by the Unread pill) |
 | `div[role="button"][aria-label]` | Listing cards on selling page (scraper searches the whole document, scoped by URL via `isSellingPage()` rather than a wrapping container selector — FB has changed the container's aria-label/role before) |
 
 If the extension stops working, the most likely cause is Facebook changing one of these

@@ -190,11 +190,11 @@
   const sellingThreads = [
     { name: "Don",       listing: "2009 Lexus RX 350",               msg: "You: thank you",           time: "4m" },
     { name: "Nav",       listing: "2016 Mazda Mazda3 GX",            msg: "You: Appointments only",   time: "33m" },
-    { name: "Jennifer",  listing: "2014 Honda Pilot EX-L",           msg: "Is it still available?",   time: "34m" },
+    { name: "Jennifer",  listing: "2014 Honda Pilot EX-L",           msg: "Is it still available?",   time: "34m", unread: true },
     { name: "Singh",     listing: "2014 Honda Pilot EX-L",           msg: "You: Yes it is",           time: "34m" },
-    { name: "Jay",       listing: "2014 Honda Pilot EX-L",           msg: "What's the lowest?",       time: "3h" },
+    { name: "Jay",       listing: "2014 Honda Pilot EX-L",           msg: "What's the lowest?",       time: "3h", unread: true },
     { name: "Hassan",    listing: "2015 Honda Odyssey EX-L",         msg: "You: $12,000 firm",        time: "5h" },
-    { name: "Saleh",     listing: "2016 Mazda Mazda3 GX",            msg: "Can I see it today?",      time: "12h" },
+    { name: "Saleh",     listing: "2016 Mazda Mazda3 GX",            msg: "Can I see it today?",      time: "12h", unread: true },
     { name: "Ahmed",     listing: "2016 Mazda Mazda3 GX",            msg: "You: Sure, come by at 3",  time: "12h" },
     { name: "Surinder",  listing: "2016 Mazda Mazda3 GX",            msg: "You: Still available",     time: "13h" },
     { name: "Van",       listing: "2014 Honda Pilot EX-L",           msg: "Any accidents?",           time: "1d" },
@@ -205,7 +205,7 @@
 
   // Buying threads — user IS the buyer
   const buyingThreads = [
-    { name: "Mike",  listing: "2012 Toyota Camry",     msg: "Is it available?",    time: "1h" },
+    { name: "Mike",  listing: "2012 Toyota Camry",     msg: "Is it available?",    time: "1h", unread: true },
     { name: "Sara",  listing: "2018 Ford F-150",       msg: "You: Yes",            time: "3h" },
     { name: "Liam",  listing: "2020 Hyundai Elantra",  msg: "What year is it?",    time: "2d" },
   ];
@@ -252,8 +252,9 @@
            onclick="openChat('${t.name}','${t.listing}','${role}'); return false;">
           <div class="avatar">${t.name[0]}</div>
           <div class="thread-info">
-            <span class="x1lliihq x193iq5w x6ikm8r x10wlt62 xlyipyv xuxw1ft">${t.name} \u00b7 ${t.listing}</span>
+            <span class="x1lliihq x193iq5w x6ikm8r x10wlt62 xlyipyv xuxw1ft"${t.unread ? ' style="font-weight:700"' : ''}>${t.name} \u00b7 ${t.listing}</span>
             <div class="preview">
+              ${t.unread ? '<div style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Unread message:</div>' : ''}
               ${t.msg} \u00b7
               <time datetime="${timeStrToISO(t.time)}" style="font-size:inherit;color:inherit;">${t.time}</time>
             </div>

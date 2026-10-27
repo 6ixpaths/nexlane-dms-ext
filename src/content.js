@@ -10,7 +10,15 @@ import stylesCSS from './styles.css?inline'
     chatGrid: 'div[aria-label="Chats"][role="grid"]',
     threadLink: 'a[href*="/marketplace/t/"]',
     sellingPageBtn: 'div[role="button"][aria-label]',
+    // Fallback unread signal: bold thread title (read rows use xk50ysn).
+    // Atomic class — FB renames these often, so it's secondary to UNREAD_LABEL.
+    unreadTitle: 'span.x1s688f',
+    openThreadLink: 'a[aria-current="page"]',
   };
+
+  // Visually hidden screen-reader label FB renders inside unread thread links.
+  // English UI only — other locales won't match (the class fallback may).
+  const UNREAD_LABEL = "Unread message";
 
   // Aria-label prefixes used by action buttons on the selling page.
   // These are NOT listing names and must be filtered out during scraping.
@@ -37,6 +45,7 @@ import stylesCSS from './styles.css?inline'
   let filterContainer = null;
   let currentListing = null;
   let buyingSearchQuery = "";
+  let unreadOnly = false; // "Unread" pill state — applies on top of the listing selection
   let debounceTimer = null;
   let isObserving = false;
   let hasScrapedSellingPage = false;
@@ -442,6 +451,31 @@ import stylesCSS from './styles.css?inline'
     return null; // inconclusive — caller uses selling-set fallback
   }
 
+  /**
+   * True when the thread row has unread messages.
+   *
+   * Primary signal: FB renders a visually hidden "Unread message:" label
+   * (a leaf div) inside the thread link of unread rows only.
+   * Fallback: the bold title class. The "Seen by …" avatar is NOT used —
+   * it only appears when we sent the last message.
+   */
+  function isUnreadThread(row) {
+    const link = row.querySelector(SELECTORS.threadLink);
+    if (!link) return false;
+
+    for (const el of link.querySelectorAll("div, span")) {
+      if (el.childElementCount === 0 && el.textContent.trim().startsWith(UNREAD_LABEL)) {
+        return true;
+      }
+    }
+    return !!link.querySelector(SELECTORS.unreadTitle);
+  }
+
+  /** True for the thread whose chat is currently open in the main panel. */
+  function isOpenThread(row) {
+    return !!row.querySelector(SELECTORS.openThreadLink);
+  }
+
   // ── Buying-filter scroll loader ────────────────────────────────────────
 
   /**
@@ -483,6 +517,7 @@ import stylesCSS from './styles.css?inline'
 
     const rows = [...new Set([...grid.querySelectorAll(SELECTORS.threadLink)].map(l => l.closest('div[role="row"]')))];
     let visibleCount = 0;
+    let unreadCount = 0; // unread rows matching the listing selection, for the pill label
 
     rows.forEach(row => {
       if (!row) return;
@@ -521,25 +556,41 @@ import stylesCSS from './styles.css?inline'
         shouldShow = !!rowName && sellingListingsLowerCase.has(rowName);
       }
 
+      // Unread pill narrows the listing selection. The open thread stays
+      // visible after FB marks it read so the list doesn't jump under the user.
+      if (shouldShow) {
+        const isUnread = isUnreadThread(row);
+        if (isUnread) unreadCount++;
+        if (unreadOnly && !isUnread && !isOpenThread(row)) shouldShow = false;
+      }
+
       row.style.display = shouldShow ? "" : "none";
       if (shouldShow) visibleCount++;
     });
 
+    updateUnreadPill(unreadCount);
     updateFilterStatus(listing, visibleCount);
+  }
+
+  function updateUnreadPill(count) {
+    const countEl = document.getElementById("mp-chat-filter-unread-count");
+    if (countEl) countEl.textContent = count;
   }
 
 
   // Helper to keep the main function clean
   function updateFilterStatus(listing, count) {
     const q = buyingSearchQuery.trim();
+    const u = unreadOnly ? "unread " : "";
+    const all = unreadOnly ? `Showing ${count} unread chat(s)` : `Showing all ${count} chat(s)`;
     if (listing === "ALL_LISTINGS") {
-      updateStatus(`Showing all ${count} chat(s)`);
+      updateStatus(all);
     } else if (listing === "BUYING_LISTINGS") {
-      updateStatus(q ? `Showing ${count} result(s) for "${q}"` : `Showing ${count} buying chat(s)`);
+      updateStatus(q ? `Showing ${count} ${u}result(s) for "${q}"` : `Showing ${count} ${u}buying chat(s)`);
     } else if (listing) {
-      updateStatus(`Showing ${count} chat(s) for "${listing}"`);
+      updateStatus(`Showing ${count} ${u}chat(s) for "${listing}"`);
     } else {
-      updateStatus(sellingListingsLowerCase ? `Showing ${count} selling chat(s)` : `Showing all ${count} chat(s)`);
+      updateStatus(sellingListingsLowerCase ? `Showing ${count} ${u}selling chat(s)` : all);
     }
   }
 
@@ -561,6 +612,9 @@ import stylesCSS from './styles.css?inline'
             <select id="mp-chat-filter-select">
                 <option value="ALL_LISTINGS">All listings</option>
             </select>
+            <button id="mp-chat-filter-unread" type="button" aria-pressed="false" title="Show only unread chats">
+                Unread · <span id="mp-chat-filter-unread-count">0</span>
+            </button>
         </div>
         <div id="mp-chat-filter-search-row" style="display: none;">
             <div id="mp-chat-filter-search-wrap">
@@ -580,6 +634,21 @@ import stylesCSS from './styles.css?inline'
     const searchInp = container.querySelector("#mp-chat-filter-search");
     const clearBtn = container.querySelector("#mp-chat-filter-search-clear");
     const searchRow = container.querySelector("#mp-chat-filter-search-row");
+    const unreadBtn = container.querySelector("#mp-chat-filter-unread");
+
+    unreadBtn.onclick = () => {
+        unreadOnly = !unreadOnly;
+        unreadBtn.setAttribute("aria-pressed", String(unreadOnly));
+        filterListing(currentListing);
+
+        // Zero unread is legitimate, but it's also what an FB markup or locale
+        // change looks like — leave a breadcrumb for diagnosing breakage.
+        const threads = getThreadItems();
+        if (unreadOnly && threads.length > 0 && !threads.some(({ row }) => isUnreadThread(row))) {
+          console.warn(`[MP Filter] No unread threads detected among ${threads.length} loaded. ` +
+            `If some are unread, FB may have changed the "${UNREAD_LABEL}" label or title class.`);
+        }
+    };
 
     select.onchange = async (e) => {
         const val = e.target.value;
