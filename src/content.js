@@ -39,6 +39,7 @@ import stylesCSS from './styles.css?inline'
   // "browser session" semantics without requiring chrome.storage.session
   // (which is not reliably accessible from content scripts).
   const SESSION_FLAG_KEY = "mp_filter_session_v1";
+  const SESSION_TTL_MS = 8 * 3600 * 1000;
 
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -189,9 +190,14 @@ import stylesCSS from './styles.css?inline'
    * changed before and is otherwise not load-bearing), filter out
    * action-button prefixes, extract "Listed on X/Y" from each card,
    * de-duplicate, and persist to storage.
+   *
+   * Safe to call repeatedly: FB lazy-loads more cards as the page scrolls,
+   * so observeSellingPageRescrape() re-runs this and each pass merges new
+   * cards in. Stored listings saved within the current session window are
+   * kept (sold/pending stock with recent chats stays known); listings from
+   * an expired session are replaced.
    */
   async function tryScrapeSellingPage() {
-    if (hasScrapedSellingPage) return;
 
     const buttons = document.querySelectorAll(SELECTORS.sellingPageBtn);
     if (buttons.length === 0) return; // cards not rendered yet
@@ -227,15 +233,24 @@ import stylesCSS from './styles.css?inline'
     hasScrapedSellingPage = true;
     markSellingPageVisited(); // idempotent — may already be set via URL detection
 
+    const existing = await readPersistedListings();
+    const sameSession = existing.savedAt && (Date.now() - existing.savedAt) < SESSION_TTL_MS;
+    if (sameSession) {
+      for (const { name, listedOn } of normalizeSelling(existing.selling)) {
+        if (!listingMap.has(name)) listingMap.set(name, listedOn);
+      }
+    }
+
     const selling = Array.from(listingMap.entries()).map(([name, listedOn]) => ({
       name,
       listedOn,
     }));
+    const unchanged = sameSession && selling.length === (existing.selling || []).length;
     storedSellingListings = selling;
     sellingListingsLowerCase = getSellingListingsLowercase();
+    if (unchanged) return; // nothing new — skip the write and the badge
 
     // Merge buying listings we may have captured via open-chat detection
-    const existing = await readPersistedListings();
     await persistListings({ selling, buying: existing.buying || [] });
 
     console.log(
@@ -366,6 +381,37 @@ import stylesCSS from './styles.css?inline'
     return new Set(storedSellingListings.map((l) => l.name.toLowerCase()));
   }
 
+  const normalizeListingName = (str) => str?.toLowerCase().trim().replace(/\s+/g, " ") ?? "";
+
+  /**
+   * True when a thread's listing name matches a listing title, using the
+   * same rules as the per-listing filter: case/whitespace-insensitive, and
+   * a prefix match either way to cover titles FB truncates in the thread UI.
+   */
+  function listingNamesMatch(rowName, listingName) {
+    const a = normalizeListingName(rowName);
+    const b = normalizeListingName(listingName);
+    if (!a || !b) return false;
+    return a === b || a.startsWith(b) || b.startsWith(a);
+  }
+
+  /** True when the thread's listing name matches any stored selling listing. */
+  function isKnownSellingListing(rowName) {
+    if (!rowName || !storedSellingListings) return false;
+    return storedSellingListings.some((l) => listingNamesMatch(rowName, l.name));
+  }
+
+  /**
+   * Classifies a thread as buying. The stored selling list is authoritative:
+   * a thread whose listing name matches a selling listing is never buying.
+   * Any other thread with a readable listing name is buying. The DOM
+   * heuristic is only consulted when the listing name can't be parsed.
+   */
+  function isBuyingRow(row, rowName) {
+    if (rowName) return !isKnownSellingListing(rowName);
+    return isBuyingThread(row) ?? true;
+  }
+
   /**
    * Returns sorted listing names (strings) for the dropdown — exclusively
    * from the selling-page scraper data stored in storedSellingListings.
@@ -418,12 +464,14 @@ import stylesCSS from './styles.css?inline'
    *   ≥ 2 <img> in the row = buying (listing thumbnail + seller profile overlay)
    *   1  <img> in the row  = selling (listing photo only)
    *
-   * Signal 3 — structural overlay div inside the <a> element:
-   *   div[data-visualcompletion="ignore"][style*="inset"] inside the link
-   *   = buying (full-row click-overlay unique to buying thread cards)
+   * The full-row hover overlay (div[data-visualcompletion="ignore"][style*="inset"])
+   * is NOT used: FB renders it on selling and buying rows alike.
    *
-   * Returns true (buying) | false (selling) | null (inconclusive).
-   * When null the caller should fall back to selling-set negation.
+   * These signals misfire on selling threads too (s133x133 thumbnails appear
+   * on seller rows), so callers only use this when the listing name can't be
+   * parsed — see isBuyingRow().
+   *
+   * Returns true (buying) | false (not a thread) | null (inconclusive).
    */
   function isBuyingThread(row) {
     const link = row.querySelector('a[href*="/marketplace/t/"]');
@@ -442,11 +490,6 @@ import stylesCSS from './styles.css?inline'
 
     // Signal 2: total <img> count in the row
     if (row.querySelectorAll("img").length >= 2) return true;
-
-    // Signal 3: full-row hover-overlay div inside <a> (buying-card specific)
-    if (link.querySelector('[data-visualcompletion="ignore"][style*="inset"]')) {
-      return true;
-    }
 
     return null; // inconclusive — caller uses selling-set fallback
   }
@@ -523,7 +566,6 @@ import stylesCSS from './styles.css?inline'
       if (!row) return;
 
       const rowName = extractListingName(parseThreadName({ row }))?.toLowerCase();
-      const isBuyingDom = isBuyingThread(row);
       const query = buyingSearchQuery.trim().toLowerCase();
 
       let shouldShow = true;
@@ -531,29 +573,13 @@ import stylesCSS from './styles.css?inline'
       if (listing === "ALL_LISTINGS") {
         shouldShow = true;
       } else if (listing === "BUYING_LISTINGS") {
-        const isBuying = isBuyingDom ?? (!rowName || !sellingListingsLowerCase?.has(rowName));
-        shouldShow = isBuying && (!query || !!rowName?.includes(query));
+        shouldShow = isBuyingRow(row, rowName) && (!query || !!rowName?.includes(query));
       } else if (listing) {
-        // Normalize both sides: collapse whitespace, trim, lowercase.
-        // Handles invisible Unicode differences between the selling page
-        // aria-label and the thread textContent.
-        const normalize = str => str?.toLowerCase().trim().replace(/\s+/g, ' ') ?? '';
-        const normalizedRow = normalize(rowName);
-        const normalizedListing = normalize(listing);
-
-        // Match if equal OR if one is a prefix of the other — covers cases
-        // where Facebook truncates long listing titles in the thread UI.
-        const nameMatches = normalizedRow === normalizedListing
-          || normalizedListing.startsWith(normalizedRow)
-          || normalizedRow.startsWith(normalizedListing);
-
-        // Name match takes priority over isBuyingThread() classification.
         // The dropdown only contains selling listings, so a matching name
-        // IS a selling thread — buying heuristics can misfire on threads
-        // with square product thumbnails (s133x133 false positive).
-        shouldShow = nameMatches;
+        // IS a selling thread.
+        shouldShow = listingNamesMatch(rowName, listing);
       } else if (sellingListingsLowerCase) {
-        shouldShow = !!rowName && sellingListingsLowerCase.has(rowName);
+        shouldShow = isKnownSellingListing(rowName);
       }
 
       // Unread pill narrows the listing selection. The open thread stays
@@ -607,7 +633,7 @@ import stylesCSS from './styles.css?inline'
     container.innerHTML = `
         <div id="mp-chat-filter-row1">
             <span id="mp-chat-filter-info">
-                Filters inactive — <a id="mp-chat-filter-info-link" href="https://www.facebook.com/marketplace/you/selling?state=LIVE&status%5B0%5D=IN_STOCK" target="_blank" rel="noopener noreferrer">Open your selling page</a> to load listings.
+                Filters inactive — <a id="mp-chat-filter-info-link" href="https://www.facebook.com/marketplace/you/selling" target="_blank" rel="noopener noreferrer">Open your selling page</a> to load listings.
             </span>
             <select id="mp-chat-filter-select">
                 <option value="ALL_LISTINGS">All listings</option>
@@ -711,24 +737,12 @@ import stylesCSS from './styles.css?inline'
 
     // 2. Pre-calculate Counts (One pass for performance)
     const threads = getThreadItems();
-    const sellSet = sellingListingsLowerCase;
 
-    const normalize = str => str?.toLowerCase().trim().replace(/\s+/g, ' ') ?? '';
-
+    // Mirror filterListing() so counts match the rows shown.
     const getCount = (listing) => threads.filter(({ row }) => {
       const rawName = extractListingName(parseThreadName({ row }));
-      const nameLower = rawName?.toLowerCase();
-      const isBuying = isBuyingThread(row) ?? (!nameLower || !sellSet?.has(nameLower));
-
-      if (listing === "BUYING_LISTINGS") return isBuying;
-
-      // Mirror filterListing() — normalize and use prefix matching so
-      // truncated thread titles and whitespace differences still count.
-      const normalizedRow = normalize(rawName);
-      const normalizedListing = normalize(listing);
-      return normalizedRow === normalizedListing
-        || normalizedListing.startsWith(normalizedRow)
-        || normalizedRow.startsWith(normalizedListing);
+      if (listing === "BUYING_LISTINGS") return isBuyingRow(row, rawName);
+      return listingNamesMatch(rawName, listing);
     }).length;
 
     // 3. Build Options via Template Strings
@@ -835,6 +849,7 @@ import stylesCSS from './styles.css?inline'
         (async () => {
           await scrollToLoadAllSellingListings();
           await tryScrapeSellingPage();
+          observeSellingPageRescrape();
         })();
       }
     });
@@ -842,6 +857,28 @@ import stylesCSS from './styles.css?inline'
     // Watch the whole document for listing cards to appear
     hydrationObserver.observe(document.body, { childList: true, subtree: true });
     console.log("[MP Filter] Watching for selling page DOM hydration...");
+  }
+
+  let sellingRescrapeObserver = null;
+
+  /**
+   * Keeps scraping while the user stays on the selling page, so cards FB
+   * loads later (manual scrolling, slow connections) are merged into storage.
+   * Disconnects when the user navigates away.
+   */
+  function observeSellingPageRescrape() {
+    if (sellingRescrapeObserver || !isSellingPage()) return;
+    let timer = null;
+    sellingRescrapeObserver = new MutationObserver(() => {
+      if (!isSellingPage()) {
+        sellingRescrapeObserver.disconnect();
+        sellingRescrapeObserver = null;
+        return;
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => tryScrapeSellingPage(), 1000);
+    });
+    sellingRescrapeObserver.observe(document.body, { childList: true, subtree: true });
   }
 
   // ── Mutation observer (lazy-loaded threads) ───────────────────────────
@@ -945,7 +982,7 @@ import stylesCSS from './styles.css?inline'
     storedSellingListings = normalizeSelling(stored.selling);
     console.log(storedSellingListings);
     const flagTs = flagData[SESSION_FLAG_KEY];
-    if (flagTs && (Date.now() - flagTs) < 8 * 3600 * 1000) {
+    if (flagTs && (Date.now() - flagTs) < SESSION_TTL_MS) {
       sellingPageVisitedThisSession = true;
       console.log("[MP Filter] Session flag restored — selling page visited this session.");
     }
@@ -1017,7 +1054,7 @@ import stylesCSS from './styles.css?inline'
       readPersistedListings(),
     ]).then(([flagData, stored]) => {
       const ts = flagData[SESSION_FLAG_KEY];
-      if (ts && (Date.now() - ts) < 8 * 3600 * 1000) {
+      if (ts && (Date.now() - ts) < SESSION_TTL_MS) {
         storedSellingListings = normalizeSelling(stored.selling);
         sellingPageVisitedThisSession = true;
         sellingListingsLowerCase = getSellingListingsLowercase();
@@ -1062,7 +1099,7 @@ import stylesCSS from './styles.css?inline'
       _storage.get(SESSION_FLAG_KEY)
         .then((d) => {
           const ts = d[SESSION_FLAG_KEY];
-          if (ts && (Date.now() - ts) < 8 * 3600 * 1000 && !sellingPageVisitedThisSession) {
+          if (ts && (Date.now() - ts) < SESSION_TTL_MS && !sellingPageVisitedThisSession) {
             sellingPageVisitedThisSession = true;
             console.log("[MP Filter] Session flag detected via navigation — activating filter.");
           }
