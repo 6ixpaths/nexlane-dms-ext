@@ -781,6 +781,10 @@ import stylesCSS from './styles.css?inline'
    * scroll position doesn't change (true bottom reached).
    */
   async function scrollToLoadAllSellingListings() {
+    // Only auto-scroll the In-stock view; other selling views/pages are left alone
+    const params = new URLSearchParams(location.search);
+    if (!IS_TEST && (params.get("state") !== "LIVE" || params.get("status[0]") !== "IN_STOCK")) return;
+
     // Configuration
     const SCROLL_DELAY = 1000; // Fallback wait when no loading indicator appears
     const MAX_STALE_RETRIES = 3; // Raised from 2 — slow connections need more patience
