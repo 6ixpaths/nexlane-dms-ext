@@ -124,15 +124,37 @@ import stylesCSS from './styles.css?inline'
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Where the listing title ends and card metadata begins. The card's
+  // aria-label is comma-separated: "2015 Toyota Corolla L, CA$7,499, Active,
+  // Listed on 10/27, Listed on Marketplace, 719 clicks on listing". Cut at the
+  // first price, status, "Listed on …" or click/view count, plus the comma/dot
+  // separator before it.
+  const LISTING_META_RE =
+    /\s*[,·]?\s*(?:[A-Z]{0,3}\$\s?\d|\b(?:Active|Pending|Sold|Draft|Out of stock)\b\s*(?:[,·]|$)|\bListed on\b|\b\d[\d,]*\s+(?:clicks?|views?)\b).*$/i;
+
+  /** Strips price / status / date / click text, leaving the year + title. */
+  function cleanListingName(raw) {
+    const cleaned = (raw || "").replace(LISTING_META_RE, "").trim();
+    return cleaned || (raw || "").trim();
+  }
+
   /**
    * Converts legacy string entries in the selling array to
-   * { name, listedOn: null } objects, for backward compatibility.
+   * { name, listedOn: null } objects, for backward compatibility. Names are
+   * cleaned so entries saved with price/date/clicks text are repaired on read.
    */
   function normalizeSelling(arr) {
     if (!arr) return [];
-    return arr.map((e) =>
-      typeof e === "string" ? { name: e, listedOn: null } : e
-    );
+    const seen = new Set();
+    const out = [];
+    for (const e of arr) {
+      const entry = typeof e === "string" ? { name: e, listedOn: null } : e;
+      const name = cleanListingName(entry.name);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push({ ...entry, name });
+    }
+    return out;
   }
 
   // ── Page detection ─────────────────────────────────────────────────────
@@ -220,8 +242,9 @@ import stylesCSS from './styles.css?inline'
       const m = btn.textContent.match(/Listed on (\d+\/\d+(?:\/\d+)?)/);
       if (!m) continue; // not a listing card
 
-      if (!listingMap.has(label)) {
-        listingMap.set(label, m[1]);
+      const name = cleanListingName(label);
+      if (!listingMap.has(name)) {
+        listingMap.set(name, m[1]);
       }
     }
 
@@ -245,7 +268,11 @@ import stylesCSS from './styles.css?inline'
       name,
       listedOn,
     }));
-    const unchanged = sameSession && selling.length === (existing.selling || []).length;
+    const existingRaw = existing.selling || [];
+    const unchanged =
+      sameSession &&
+      selling.length === existingRaw.length &&
+      existingRaw.every((e) => cleanListingName(typeof e === "string" ? e : e.name) === (typeof e === "string" ? e : e.name));
     storedSellingListings = selling;
     sellingListingsLowerCase = getSellingListingsLowercase();
     if (unchanged) return; // nothing new — skip the write and the badge
